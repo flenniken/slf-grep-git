@@ -39,101 +39,142 @@ The command runs the shell command:
 git ls-files | grep -v -f ignore.txt | xargs grep -n
 "
   (interactive)
-  (let (word buffer buffer-name cmd num-lines temp-buffer
-             ignore-file git-root use-regex qword searcher switches)
-    (catch 'slf-grep-tag
-      ;; Get the git root folder or prompt for it.
-      (setq slf-grep-git-root (slf-find-root-folder))
-      (when (not slf-grep-git-root)
-        (message "no git root folder")
-        (throw 'slf-grep-tag nil))
+  (let (word use-regex buffer-name results-buffer temp-buffer folder r)
+    ;; Get the git root folder or prompt for it.
+    (setq folder (slf-find-root-folder))
+    ;; (message "folder = %s" folder)
 
-      ;; Get the selected text or prompt for it.  The selected text is
-      ;; treated as a fixed string and it is quoted. Typed in text is
-      ;; treated as a regular expression and is not quoted.  You can
-      ;; add extra switches this way and you can quote or not.
-      (if mark-active
-        (progn
-          (setq use-regex nil)
-          (slf-mark-then-point)
-          (setq word (slf-read-region)))
-        (setq use-regex t)
-        (setq word (read-from-minibuffer "grep for: ")))
+    ;; Get the word to search and whether to use regex.
+    (setq r (slf-get-search-word))
+    (setq word (car r))
+    (setq use-regex (nth 1 r))
+    ;; (message "word = %s" word)
+    ;; (message "use-regex = %s" use-regex)
+    
+    ;; Name the buffer. Base the name off the folder name so it is
+    ;; unique but always the same.
+    (setq buffer-name (concat "slf-grep-" (substring (md5 folder) 0 8) ".txt"))
+    ;; (message "buffer-name = %s" buffer-name)
 
-      ;; Make sure the search word is not too long.
-      (when (or (equal word "") (> (length word) slf-grep-max-chars))
-        (message (format "To many characters selected. Select less than %d (slf-grep-max-chars)."
-                         slf-grep-max-chars))
-        (throw 'slf-grep-tag nil))
+    ;; Open the results buffer and append to it.
+    (setq results-buffer (get-buffer-create buffer-name))
+    (set-buffer results-buffer)
+    (setq default-directory folder)
+    (end-of-buffer)
+    (insert (format "\n\nGrepping for: %s\n" word))
 
-      ;; Name the buffer. Base the name off the root directory so it is
-      ;; unique but always the same.
-      (setq buffer-name (concat "slf-grep-" (substring (md5 slf-grep-git-root) 0 8) ".txt"))
+    ;; Grep and return a new buffer with the results.
+    (setq temp-buffer (slf-grep folder use-regex word))
+    (set-buffer temp-buffer)
+    (setq num-lines (count-lines (point-min) (point-max)))
+    ;; (message "num-lines = %s" num-lines)
 
-      ;; Open the results buffer and append to it.
-      (setq results-buffer (get-buffer-create buffer-name))
-      (set-buffer results-buffer)
-      (setq default-directory slf-grep-git-root)
-      (end-of-buffer)
-      (insert (format "\n\nGrepping for: %s\n" word))
-
-      ;; Put the info in a temp buffer. Then the search word can be
-      ;; highlighted and rows counted before commiting to the
-      ;; results buffer.
-      (setq temp-buffer (generate-new-buffer "slf-grep-temp"))
-      (set-buffer temp-buffer)
-
-      ;; The subprocess uses the default-directory as its current
-      ;; directory. Set it to the git root directory.
-      (setq default-directory slf-grep-git-root)
-
-      ;; Look for the ignore.txt file first in the git root directory
-      ;; then in the home dir.
-      (setq ignore-file "ignore.txt")
-      (if (not (file-exists-p ignore-file))
-        (setq ignore-file "~/ignore.txt"))
-
-      ;; Quote the search word when using a selection.
-      (if use-regex
-        (progn
-          (setq switches "")
-          (setq qword word))
-        (setq switches " -F")
-        (setq qword (concat "\"" word "\"")))
-
-      ;; Run the shell commands.
-      (setq cmd (format "git ls-files | grep -v -f %s | xargs grep -n%s %s" ignore-file switches qword))
-      (message cmd)
-      (call-process "/bin/bash" nil temp-buffer nil "-c" cmd)
-
-      ;; Count the lines in the buffer.  If too many, don't add them to
-      ;; the grep buffer.
-      (setq num-lines (count-lines (point-min) (point-max)))
-      (if (> num-lines slf-grep-max-lines)
-        (progn
-          (set-buffer results-buffer)
-          (insert (format "There are more than %d (slf-grep-max-lines) matching lines.\n"
-                          slf-grep-max-lines)))
-
-        (defun searcher (use-regex word)
-          (if use-regex
-            (search-forward-regexp word nil t)
-            (search-forward word nil t)))
-
-        ;;;; Color the words in the buffer.
-        (goto-char (point-min))
-        (while (funcall #'searcher use-regex word)
-          (put-text-property (match-beginning 0) (point) 'face '(:foreground "red")))
-
-        ;; Insert the lines into the grep buffer.
+    ;; Check for too many lines.
+    (if (> num-lines slf-grep-max-lines)
+      (progn
         (set-buffer results-buffer)
-        (insert (format "%d lines\n" num-lines))
-        (insert-buffer-substring temp-buffer)
-        (insert (format "%d lines\n" num-lines)))
-        (setq default-directory slf-grep-git-root)
+        (setq default-directory folder)
+        (insert (format "Found %d matches which is over the maximum of %d, see slf-grep-max-lines.\n"
+                         num-lines slf-grep-max-lines)))
+      ;; Color the matching words.
+      (slf-color-words use-regex word)
+      (set-buffer results-buffer)
+      (setq default-directory folder)
+      ;; Insert the matching lines into the results buffer.
+      (insert (format "%d lines\n" num-lines))
+      (insert-buffer-substring temp-buffer)
+      (when (> num-lines 0)
+        (insert (format "%d lines\n" num-lines))))
 
-      (kill-buffer temp-buffer)
-      (switch-to-buffer results-buffer))))
+    (kill-buffer temp-buffer)
+    (switch-to-buffer results-buffer)))
+
+
+;; (setq slf-grep-git-root nil)
+
+
+(defun slf-get-search-word()
+" Return list containing the word to search and whether it is a regex or not.
+
+Get the selected text or prompt for it.  The selected text is
+treated as a fixed string and it is quoted. Typed in text is
+treated as a regular expression and is not quoted.  You can add
+extra switches this way and you can quote or not.
+"
+  (interactive)
+  (let (word use-regex lword)
+    ;; Use the selected text or when nothing selected, prompt for it.
+    (if mark-active
+      (progn
+        (setq use-regex nil)
+        (setq word (buffer-substring-no-properties (mark) (point))))
+      (setq use-regex t)
+      (setq word (read-from-minibuffer "grep for: ")))
+
+    (setq lword (length word))
+    (when (equal lword 0)
+      (error ""))
+
+    ;; Make sure the search word is not too long.
+    (when (> lword slf-grep-max-chars)
+      (error (format "You selected %d characters which is over the maximum of %d, see slf-grep-max-chars."
+                       lword slf-grep-max-chars)))
+
+    (list word use-regex)))
+
+
+(defun slf-grep(folder use-regex word)
+"Grep for the given word in the files in the given folder using
+regex or not. Return a buffer containing the results.
+"
+  (let (cmd temp-buffer ignore-file qword searcher switches)
+    ;; Put the info in a temp buffer. Then the search word can be
+    ;; highlighted and rows counted before commiting to the
+    ;; results buffer.
+    (setq temp-buffer (generate-new-buffer "slf-grep-temp"))
+    (set-buffer temp-buffer)
+    ;; The subprocess uses the default-directory as its current
+    ;; directory. Set it to the git root directory.
+    (setq default-directory folder)
+
+    ;; Use the ignore.txt file if it's in the git root directory
+    ;; otherwise use the one in the home folder.
+    (if (file-exists-p "ignore.txt")
+      (setq ignore-file "ignore.txt")
+      (setq ignore-file "~/ignore.txt"))
+    ;; (message "ignore-file = %s" ignore-file)
+
+    ;; Quote the search word when not using a regex.
+    (if use-regex
+      (progn
+        (setq switches "")
+        (setq qword word))
+      (setq switches " -F")
+      (setq qword (concat "\"" word "\"")))
+    ;; (message "switches = %s" switches)
+    ;; (message "qword = %s" qword)
+
+    ;; Run the shell commands.
+    (setq cmd (format "git ls-files | grep -v -f %s | xargs grep -n%s %s" ignore-file switches qword))
+    (message cmd)
+    (call-process "/bin/bash" nil temp-buffer nil "-c" cmd)
+
+    temp-buffer))
+
+
+(defun slf-color-words(use-regex word)
+" Color all instances of the given word in the current buffer.
+"
+  (let (searcher)
+    (defun searcher (use-regex word)
+      (if use-regex
+        (search-forward-regexp word nil t)
+        (search-forward word nil t)))
+
+    ;;;; Color the words in the buffer.
+    (goto-char (point-min))
+    (while (funcall #'searcher use-regex word)
+      (put-text-property (match-beginning 0) (point) 'face '(:foreground "red")))))
 
 
 (defun slf-folder-part(path)
@@ -150,63 +191,58 @@ git ls-files | grep -v -f ignore.txt | xargs grep -n
     (file-name-directory path)))
 
 
-(defun slf-look-for-git()
-" Look for the .git folder relative to the current file. Return
+(defun slf-look-for-git(filename)
+" Look for the .git folder relative to the given filename. Return
   the folder or nil when not found.
 "
   (let (root folder name)
     (setq root nil)
-    (setq name (buffer-file-name))
+    (setq name filename)
     (when name
       (setq folder (slf-folder-part name))
+      ;; (message folder)
       (while folder
         (if (file-exists-p (concat folder ".git"))
           (progn
             (setq root folder)
             (setq folder nil))
+          ;; (message folder)
           (setq folder (slf-folder-part folder))))
       root)))
 
 
 (defun slf-find-root-folder()
-" Return the git root folder to use for searching or nil when nothing can be found.
+" Return the git root folder to use for searching.
 "
+  (interactive)
   (let (git-root)
     ;; Look for the git root folder relative to the current file.
-    (setq git-root (slf-look-for-git))
+    (setq git-root (slf-look-for-git (buffer-file-name)))
+    ;; (message "git-root = %s" git-root)
 
     ;; When the git root folder cannot be found, use the last one
     ;; found.
     (when (not git-root)
-      (setq git-root slf-grep-git-root))
+      (setq git-root slf-grep-git-root)
+      ;; (message "git-root = %s" git-root)
+      )
 
     ;; If no last one, prompt for it.
     (when (not git-root)
-      (setq git-root (read-from-minibuffer "git root folder: ")))
+      (setq git-root (read-from-minibuffer "git root folder: "))
+      ;; (message "git-root = %s" git-root)
+      (when (equal (length git-root) 0)
+        (error ""))
+      ;; Add an ending slash if needed.
+      (when (not (equal (substring git-root -1) "/"))
+        (setq git-root (concat git-root "/"))
+        ;; (message "git-root = %s" git-root)
+        )
+      ;; Make sure the entered directory is really a git root.
+      (when (not (file-exists-p (concat git-root ".git")))
+        (error (format "'%s' is not a git root directory." git-root))))
 
     (setq slf-grep-git-root git-root)
     slf-grep-git-root))
 
-
-(when (>= emacs-major-version 24)
-  (defvar run-test-code nil)
-
-  (when run-test-code
-    (assert (equal (slf-folder-part "/home/steve/code/file.py") "/home/steve/code/"))
-    (assert (equal (slf-folder-part "/home/steve/code/") "/home/steve/"))
-    (assert (equal (slf-folder-part "/home/steve/") "/home/"))
-    (assert (equal (slf-folder-part "/home/") "/"))
-    (assert (equal (slf-folder-part "/") nil))
-    (assert (equal (slf-folder-part "/home/steve/code/y") "/home/steve/code/")))
-
-  (when run-test-code
-    (assert (equal (slf-look-for-git) "/home/steve/emacs/")))
-
-  (when run-test-code
-    (assert (equal (slf-find-root-folder) "/home/steve/emacs/")))
-
-  (when run-test-code
-    (assert (equal (md5 "/home/steve/emacs/") "e459440a8d79d467f39ea3e9fbeb8c37")))
-
-  (when run-test-code
-    (assert (equal (substring (md5 "/home/steve/emacs/") 0 8) "e459440a"))))
+(setq slf-grep-git-root nil)
