@@ -33,9 +33,7 @@ the home folder is used.
 
 If the number of matching lines is more than
 `slf-grep-max-lines` (400), the lines are not appended to the
-results buffer. If the number of characters is greater than
-`slf-grep-max-chars` (200), the command is ignored. You can
-configure these values if you want.
+results buffer.
 
 
 Install:

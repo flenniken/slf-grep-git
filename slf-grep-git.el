@@ -1,6 +1,5 @@
 
 (defvar slf-grep-max-lines 400 "Do not show matches when there are more than this number.")
-(defvar slf-grep-max-chars 200 "Do not search for text longer than this value.")
 (defvar slf-grep-git-root nil "The default git root folder. Used when the folder cannot be found automatically.")
 
 (defun slf-grep-git()
@@ -30,9 +29,7 @@ the home folder is used.
 
 If the number of matching lines is more than
 slf-grep-max-lines (400), the lines are not appended to the
-results buffer. If the number of characters is greater than
-slf-grep-max-chars (200), the command is ignored. You can
-configure these values if you want.
+results buffer.
 
 The command runs the shell command:
 
@@ -50,7 +47,7 @@ git ls-files | grep -v -f ignore.txt | xargs grep -n
     (setq use-regex (nth 1 r))
     ;; (message "word = %s" word)
     ;; (message "use-regex = %s" use-regex)
-    
+
     ;; Name the buffer. Base the name off the folder name so it is
     ;; unique but always the same.
     (setq buffer-name (concat "slf-grep-" (substring (md5 folder) 0 8) ".txt"))
@@ -94,12 +91,13 @@ git ls-files | grep -v -f ignore.txt | xargs grep -n
 
 
 (defun slf-get-search-word()
-" Return list containing the word to search and whether it is a regex or not.
+"Get the selected text or prompt for it.
 
-Get the selected text or prompt for it.  The selected text is
-treated as a fixed string and it is quoted. Typed in text is
-treated as a regular expression and is not quoted.  You can add
-extra switches this way and you can quote or not.
+Return a list containing the word to search and whether it is a
+regular expresssion or not.  The selected text is treated as a
+fixed string and it is quoted. Typed in text is treated as a
+regular expression and is not quoted.  You can add extra switches
+this way and you can quote or not.
 "
   (interactive)
   (let (word use-regex lword)
@@ -115,10 +113,12 @@ extra switches this way and you can quote or not.
     (when (equal lword 0)
       (error ""))
 
-    ;; Make sure the search word is not too long.
-    (when (> lword slf-grep-max-chars)
-      (error (format "You selected %d characters which is over the maximum of %d, see slf-grep-max-chars."
-                       lword slf-grep-max-chars)))
+    ;; Check for newlines in the word.
+    (when (string-match "\n" word)
+      (error "You cannot search with newlines in the word."))
+
+    (when (called-interactively-p 'interactive)
+        (message "word='%s'" word))
 
     (list word use-regex)))
 
@@ -133,6 +133,7 @@ regex or not. Return a buffer containing the results.
     ;; results buffer.
     (setq temp-buffer (generate-new-buffer "slf-grep-temp"))
     (set-buffer temp-buffer)
+
     ;; The subprocess uses the default-directory as its current
     ;; directory. Set it to the git root directory.
     (setq default-directory folder)
@@ -156,7 +157,7 @@ regex or not. Return a buffer containing the results.
 
     ;; Run the shell commands.
     (setq cmd (format "git ls-files | grep -v -f %s | xargs grep -n%s %s" ignore-file switches qword))
-    (message cmd)
+    (message "%s" cmd)
     (call-process "/bin/bash" nil temp-buffer nil "-c" cmd)
 
     temp-buffer))
@@ -165,13 +166,15 @@ regex or not. Return a buffer containing the results.
 (defun slf-color-words(use-regex word)
 " Color all instances of the given word in the current buffer.
 "
+  (interactive "i\nsword: ")
   (let (searcher)
+    (setq case-fold-search nil)
     (defun searcher (use-regex word)
       (if use-regex
         (search-forward-regexp word nil t)
         (search-forward word nil t)))
 
-    ;;;; Color the words in the buffer.
+    ;; Color the words in the buffer.
     (goto-char (point-min))
     (while (funcall #'searcher use-regex word)
       (put-text-property (match-beginning 0) (point) 'face '(:foreground "red")))))
@@ -192,51 +195,52 @@ regex or not. Return a buffer containing the results.
 
 
 (defun slf-look-for-git(filename)
-" Look for the .git folder relative to the given filename. Return
-  the folder or nil when not found.
+"Look for the .git folder relative to the given filename.
+
+Return the folder or nil when not found.
 "
+  (interactive "fpath:")
   (let (root folder name)
     (setq root nil)
     (setq name filename)
     (when name
       (setq folder (slf-folder-part name))
-      ;; (message folder)
       (while folder
         (if (file-exists-p (concat folder ".git"))
           (progn
             (setq root folder)
             (setq folder nil))
-          ;; (message folder)
           (setq folder (slf-folder-part folder))))
+      (when (called-interactively-p 'interactive)
+        (message "root='%s'" root))
       root)))
 
 
 (defun slf-find-root-folder()
-" Return the git root folder to use for searching.
+"Return the git root folder.
+  * Look for the git root folder relative to the current file.
+  * When the git root folder cannot be found, use the last one
+    found.
+  * If no last one, prompt for it.
 "
   (interactive)
   (let (git-root)
     ;; Look for the git root folder relative to the current file.
     (setq git-root (slf-look-for-git (buffer-file-name)))
-    ;; (message "git-root = %s" git-root)
 
     ;; When the git root folder cannot be found, use the last one
     ;; found.
     (when (not git-root)
-      (setq git-root slf-grep-git-root)
-      ;; (message "git-root = %s" git-root)
-      )
+      (setq git-root slf-grep-git-root))
 
     ;; If no last one, prompt for it.
     (when (not git-root)
       (setq git-root (read-from-minibuffer "git root folder: "))
-      ;; (message "git-root = %s" git-root)
       (when (equal (length git-root) 0)
         (error ""))
       ;; Add an ending slash if needed.
       (when (not (equal (substring git-root -1) "/"))
         (setq git-root (concat git-root "/"))
-        ;; (message "git-root = %s" git-root)
         )
       ;; Make sure the entered directory is really a git root.
       (when (not (file-exists-p (concat git-root ".git")))
@@ -245,4 +249,4 @@ regex or not. Return a buffer containing the results.
     (setq slf-grep-git-root git-root)
     slf-grep-git-root))
 
-(setq slf-grep-git-root nil)
+;; (setq slf-grep-git-root nil)
