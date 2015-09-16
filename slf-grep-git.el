@@ -1,5 +1,5 @@
 
-(defvar slf-grep-max-lines 400 "Do not show matches when there are more than this number.")
+(defvar slf-grep-max-lines 400 "Do not show all matches when there are more than this number.")
 (defvar slf-grep-git-root nil "The default git root folder. Used when the folder cannot be found automatically.")
 
 (defun slf-grep-git()
@@ -28,7 +28,7 @@ in the git root folder is used when it exists, else the one in
 the home folder is used.
 
 If the number of matching lines is more than
-slf-grep-max-lines (400), the lines are not appended to the
+slf-grep-max-lines (400), only 16 lines are appended to the
 results buffer.
 
 The command runs the shell command:
@@ -69,19 +69,27 @@ git ls-files | grep -v -f ignore.txt | xargs grep -n
     ;; Check for too many lines.
     (if (> num-lines slf-grep-max-lines)
       (progn
-        (set-buffer results-buffer)
-        (setq default-directory folder)
-        (insert (format "Found %d matches which is over the maximum of %d, see slf-grep-max-lines.\n"
-                         num-lines slf-grep-max-lines)))
-      ;; Color the matching words.
-      (slf-color-words use-regex word)
-      (set-buffer results-buffer)
-      (setq default-directory folder)
+        (setq start 1)
+        (goto-line 17)
+        (setq end (point))))
+        
+    ;; Color the matching words.
+    (slf-color-words use-regex word)
+    (set-buffer results-buffer)
+    (setq default-directory folder)
+
+    (if (> num-lines slf-grep-max-lines)
+      (progn
+        (insert (format "Found %d matches which is over the maximum of %d, showing 16, see slf-grep-max-lines.\n"
+                         num-lines slf-grep-max-lines))
+        (insert-buffer-substring temp-buffer start end))
+        
       ;; Insert the matching lines into the results buffer.
       (insert (format "%d lines\n" num-lines))
-      (insert-buffer-substring temp-buffer)
-      (when (> num-lines 0)
-        (insert (format "%d lines\n" num-lines))))
+      (insert-buffer-substring temp-buffer))
+
+    (when (> num-lines 0)
+      (insert (format "%d lines\n" num-lines)))
 
     (kill-buffer temp-buffer)
     (switch-to-buffer results-buffer)))
@@ -117,8 +125,8 @@ this way and you can quote or not.
     (when (string-match "\n" word)
       (error "You cannot search with newlines in the word."))
 
-    (when (called-interactively-p 'interactive)
-        (message "word='%s'" word))
+    ;; (when (called-interactively-p 'interactive)
+    ;;     (message "word='%s'" word))
 
     (list word use-regex)))
 
@@ -211,8 +219,8 @@ Return the folder or nil when not found.
             (setq root folder)
             (setq folder nil))
           (setq folder (slf-folder-part folder))))
-      (when (called-interactively-p 'interactive)
-        (message "root='%s'" root))
+      ;; (when (called-interactively-p 'interactive)
+      ;;   (message "root='%s'" root))
       root)))
 
 
