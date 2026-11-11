@@ -92,7 +92,8 @@ git ls-files | grep -v -f ignore.txt | xargs grep -n
       (insert (format "%d lines\n" num-lines)))
 
     (kill-buffer temp-buffer)
-    (switch-to-buffer results-buffer)))
+    (switch-to-buffer results-buffer)
+    (goto-char (point-max))))
 
 
 ;; (setq slf-grep-git-root nil)
